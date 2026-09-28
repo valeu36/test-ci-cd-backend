@@ -15,7 +15,7 @@ export class HealthController {
   ) {}
 
   /**
-   * Liveness/readiness — Railway's healthcheck path (railway.json) points here,
+   * Liveness/readiness — the api service's Railway healthcheck path points here,
    * so a new deployment only takes traffic once it can reach its database.
    */
   @Get()

@@ -51,12 +51,22 @@ needs to require.
 ## Railway (CD)
 
 Per environment, one Railway project with a **Postgres** service and an **api**
-service linked to this repo, branch `main`, **Wait for CI on**. Build, pre-deploy
-migration, healthcheck and restart policy live in `railway.json`. Set on the api
-service:
+service linked to this repo, branch `main`, **Wait for CI on**. Railway builds
+the `Dockerfile` at the repo root.
 
-- `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-- `CORS_ORIGINS=https://<web service domain>`
-- `SWAGGER_ENABLED=false` (default) or `true`
+These live in the Railway service settings, not in this repo — Railway no
+longer accepts `railway.json` for new services, and its replacement
+(`.railway/railway.ts`) is only applied by running `railway config apply`:
+
+| Setting            | Value                                     |
+| ------------------ | ----------------------------------------- |
+| Pre-deploy command | `npm run migration:run:prod`              |
+| Healthcheck        | `/api/v1/health`, 120s timeout            |
+| Restart policy     | on failure, 5 retries                     |
+| Draining           | 30s                                       |
+| `DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`              |
+| `PORT`             | `3000`                                    |
+| `CORS_ORIGINS`     | `https://${{web.RAILWAY_PUBLIC_DOMAIN}}`  |
+| `SWAGGER_ENABLED`  | unset (`false`), or `true` to serve /docs |
 
 Rollback: redeploy a previous deployment from the Railway dashboard.
