@@ -1,0 +1,98 @@
+{
+  "name": "test-ci-cd-backend",
+  "version": "0.0.1",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "scripts": {
+    "build": "nest build",
+    "start": "NODE_ENV=development nest start",
+    "start:dev": "NODE_ENV=development nest start --watch",
+    "start:debug": "NODE_ENV=development nest start --debug --watch",
+    "start:prod": "NODE_ENV=production node dist/main",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "NODE_ENV=testing jest",
+    "test:watch": "NODE_ENV=testing jest --watch",
+    "test:cov": "NODE_ENV=testing jest --coverage",
+    "test:e2e": "NODE_ENV=testing jest --config test/jest-e2e.json",
+    "env:testing": "bash scripts/ensure-env-testing.sh",
+    "e2e:serve": "bash scripts/e2e-serve.sh",
+    "migration:generate": "NODE_ENV=development NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts",
+    "migration:create": "typeorm-ts-node-commonjs migration:create",
+    "migration:run:dev": "NODE_ENV=development NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
+    "migration:run:test": "NODE_ENV=testing NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
+    "migration:run:prod": "NODE_ENV=production typeorm migration:run -d dist/database/data-source.js",
+    "migration:revert:dev": "NODE_ENV=development NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
+    "migration:revert:prod": "NODE_ENV=production typeorm migration:revert -d dist/database/data-source.js",
+    "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d --wait",
+    "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
+    "docker:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
+    "docker:test:down": "docker compose -f docker-compose.test.yml down"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "modulePaths": [
+      "<rootDir>/.."
+    ],
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.6",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.2.6",
+    "@nestjs/platform-express": "^11.2.6",
+    "@nestjs/swagger": "^11.4.7",
+    "@nestjs/terminus": "^11.1.1",
+    "@nestjs/typeorm": "^11.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "dotenv": "^18.0.4",
+    "joi": "^18.2.9",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "typeorm": "^1.1.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/schematics": "^11.1.0",
+    "@nestjs/testing": "^11.2.6",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.19.0",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-simple-import-sort": "^14.0.0",
+    "globals": "^17.12.0",
+    "jest": "^30.5.2",
+    "prettier": "^3.9.9",
+    "source-map-support": "^0.5.21",
+    "supertest": "^7.3.0",
+    "ts-jest": "^29.4.14",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1"
+  }
+}

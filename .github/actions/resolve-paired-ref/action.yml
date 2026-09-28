@@ -1,0 +1,254 @@
+name: Resolve paired ref
+description: >
+  Picks which commit of the sibling repository this run tests against, and
+  reports whether that commit is already on the sibling's default branch.
+
+# This file is duplicated verbatim in test-ci-cd-backend and test-ci-cd-frontend —
+# only the `with:` block at each call site differs. Keep the two byte-identical;
+# a plain diff should be empty.
+#
+# A feature usually spans both repos, so pinning the sibling to its default
+# branch would mean one half has to merge unverified before the other half can
+# go green. This resolves a per-run pairing instead:
+#
+#   1. workflow_dispatch input                          (explicit)
+#   2. a `<trailer-key>: <branch>` line in the PR body  (explicit)
+#   3. the same-named branch in the sibling repo        (implicit, the common case)
+#   4. the sibling's default branch
+#
+# A missing branch is a fallback when the candidate was implicit and an error when
+# it was explicit: someone who typed a ref meant it, and silently testing against
+# the default branch instead is exactly the false green this action exists to
+# remove.
+#
+# `merged` reports whether the resolved commit is on the sibling's default branch.
+# Both repos currently only warn on it: gating would have to be one-sided anyway,
+# since two repos each refusing to merge until the other had would deadlock.
+
+inputs:
+  repository:
+    description: The sibling repository, owner/name.
+    required: true
+  base:
+    description: >
+      The sibling's default branch. Both the fallback and the reference point
+      `merged` is computed against.
+    required: false
+    default: main
+  trailer-key:
+    description: >
+      The PR-body line that overrides the branch-name match, without the colon —
+      `Backend-Ref` when this repo pairs with a backend, `Frontend-Ref` when it
+      pairs with a frontend.
+    required: true
+  token:
+    description: >
+      Token that can read `repository`. github.token is scoped to one repository
+      and cannot read a sibling private repo, so this is a PAT. Pass it possibly
+      empty rather than pre-collapsed with `|| github.token`: an unreadable
+      sibling is fatal either way, but "the PAT is wrong" and "there is no PAT"
+      call for different fixes, and the run should say which.
+    required: false
+    default: ""
+  token-secret-name:
+    description: The secret `token` comes from, so failures can name it.
+    required: false
+    default: SIBLING_REPO_TOKEN
+  self-token:
+    description: >
+      Token for THIS repo, used only to read the PR body. Kept separate from
+      `token` so a fine-grained PAT scoped to the sibling alone still works.
+    required: false
+    default: ${{ github.token }}
+  dispatch-ref:
+    description: workflow_dispatch override. Blank means auto-resolve.
+    required: false
+    default: ""
+
+outputs:
+  sha:
+    description: The sibling commit to check out. Always a full SHA.
+    value: ${{ steps.resolve.outputs.sha }}
+  ref:
+    description: The branch that SHA came from, for humans.
+    value: ${{ steps.resolve.outputs.ref }}
+  source:
+    description: How the ref was picked — dispatch | trailer | branch-match | default.
+    value: ${{ steps.resolve.outputs.source }}
+  merged:
+    description: >
+      'true' when the resolved SHA is the base branch's tip, i.e. this run relies
+      on nothing unmerged.
+    value: ${{ steps.resolve.outputs.merged }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        REPO: ${{ inputs.repository }}
+        BASE: ${{ inputs.base }}
+        TRAILER_KEY: ${{ inputs.trailer-key }}
+        SIBLING_TOKEN: ${{ inputs.token }}
+        TOKEN_SECRET: ${{ inputs.token-secret-name }}
+        SELF_TOKEN: ${{ inputs.self-token }}
+        DISPATCH_REF: ${{ inputs.dispatch-ref }}
+        EVENT: ${{ github.event_name }}
+        HEAD_REF: ${{ github.head_ref }}
+        REF_NAME: ${{ github.ref_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        SELF_REPO: ${{ github.repository }}
+      # No `set -x` anywhere below: the tokens are in the environment.
+      run: |
+        set -euo pipefail
+
+        die() { echo "::error title=Paired ref::$*"; exit 1; }
+
+        # github.token is always non-empty, so "was a PAT configured?" has to be
+        # answered before defaulting to it — an unreadable sibling means "the PAT
+        # is wrong" in one case and "there is no PAT" in the other, and the two
+        # need different things done about them.
+        token_supplied=true
+        if [ -z "$SIBLING_TOKEN" ]; then
+          token_supplied=false
+          SIBLING_TOKEN="$SELF_TOKEN"
+        fi
+        sibling_api() { GH_TOKEN="$SIBLING_TOKEN" gh api "$@"; }
+        self_api()    { GH_TOKEN="$SELF_TOKEN" gh api "$@"; }
+
+        # The REST API answers 404 both for "that branch does not exist" and for
+        # "this token cannot see that repository" — it will not confirm a private
+        # repo exists. Left conflated, an unreadable sibling would look like a
+        # branch miss and quietly resolve to $BASE on every single run, which is
+        # precisely the false green this action exists to remove. So settle repo
+        # access once, up front, and let a 404 afterwards mean what it says.
+        if ! sibling_api "repos/$REPO" >/dev/null 2>&1; then
+          if [ "$token_supplied" = true ]; then
+            die "cannot read $REPO. $TOKEN_SECRET has expired or lacks read access to that repository."
+          fi
+          die "cannot read $REPO. The default GITHUB_TOKEN is scoped to this repository alone, so a sibling private repo needs a read-scoped PAT in the $TOKEN_SECRET secret."
+        fi
+
+        # Sets PROBE_SHA (empty when the branch is absent). Called plainly, never
+        # as $(probe …) — a subshell could neither report a fatal response nor
+        # stop the run.
+        probe() {
+          local out status
+          PROBE_SHA=""
+          if out=$(sibling_api "repos/$REPO/branches/$1" 2>/dev/null); then
+            PROBE_SHA=$(printf '%s' "$out" | jq -r '.commit.sha')
+            return
+          fi
+          # A transport-level failure leaves no body to read a status out of.
+          status=$(printf '%s' "$out" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
+          [ -n "$status" ] || status=unknown
+          [ "$status" = 404 ] || die "unexpected response from $REPO for branch '$1' (HTTP $status)."
+        }
+
+        # --- 1. candidate ----------------------------------------------------
+        # explicit=1 flips a missing branch from "fall back" to "fail".
+        explicit=0
+        if [ -n "$DISPATCH_REF" ]; then
+          candidate="$DISPATCH_REF"; source=dispatch; explicit=1
+        else
+          # Read the body live rather than from github.event: the payload is
+          # frozen at event time, so a trailer added after the first run would be
+          # invisible to "Re-run all jobs" — the one moment it is most likely to
+          # be added.
+          trailer=""
+          if [ "$EVENT" = pull_request ] && [ -n "${PR_NUMBER:-}" ]; then
+            body=$(self_api "repos/$SELF_REPO/pulls/$PR_NUMBER" --jq '.body // ""') \
+              || die "cannot read the PR body (grant the job \`pull-requests: read\`). Refusing to guess whether a $TRAILER_KEY override was set."
+            # Matched case-insensitively, then everything up to the first colon
+            # is dropped — which is the key, whatever case it was written in.
+            trailer=$(
+              printf '%s\n' "$body" \
+                | tr -d '\r' \
+                | grep -iEm1 "^[[:space:]]*${TRAILER_KEY}:" \
+                | sed -E 's/^[^:]*:[[:space:]]*//; s/`//g; s/[[:space:]]+$//' \
+                || true
+            )
+          fi
+          if [ -n "$trailer" ]; then
+            candidate="$trailer"; source=trailer; explicit=1
+          else
+            # head_ref on a PR, ref_name otherwise — so a push to the default
+            # branch asks for $BASE, and a manual dispatch on a feature branch
+            # still pairs.
+            candidate="${HEAD_REF:-$REF_NAME}"; source=branch-match
+          fi
+        fi
+        if [ -z "$candidate" ] || [ "$candidate" = "$BASE" ]; then
+          candidate="$BASE"; source=default
+        fi
+
+        # The candidate goes into an API path. Anything outside git's ordinary
+        # branch alphabet is a copy-paste artefact, not a ref.
+        if ! printf '%s' "$candidate" | grep -qE '^[A-Za-z0-9._][A-Za-z0-9._/-]*$'; then
+          die "'$candidate' is not a valid branch name (from: $source)."
+        fi
+
+        # --- 2. probe --------------------------------------------------------
+        # The repo is known readable by now, so an empty result means the branch
+        # genuinely is not there.
+        probe "$candidate"
+        sha="$PROBE_SHA"
+        if [ -z "$sha" ]; then
+          [ "$explicit" = 0 ] || die "'$candidate' does not exist in $REPO. Fix the $source ref, or drop it to test against $BASE."
+          candidate="$BASE"; source=default
+          probe "$BASE"
+          sha="$PROBE_SHA"
+          [ -n "$sha" ] || die "$REPO has no '$BASE' branch."
+        fi
+
+        # --- 3. containment --------------------------------------------------
+        base_sha="$sha"
+        if [ "$candidate" != "$BASE" ]; then
+          probe "$BASE"
+          base_sha="$PROBE_SHA"
+          [ -n "$base_sha" ] || die "$REPO has no '$BASE' branch."
+        fi
+
+        merged=true
+        if [ "$sha" != "$base_sha" ]; then
+          # `behind` means the candidate is an ancestor of base: already merged.
+          # Take base's tip instead — a branch left undeleted after its merge is
+          # not a pairing, and the run should see all of base rather than a
+          # snapshot of it.
+          cmp=$(sibling_api "repos/$REPO/compare/$BASE...$sha" --jq '.status' 2>/dev/null) \
+            || die "cannot compare $BASE...$sha in $REPO."
+          case "$cmp" in
+            identical|behind)
+              echo "::notice title=Paired ref::'$candidate' is already on $BASE; using $BASE."
+              candidate="$BASE"; source=default; sha="$base_sha" ;;
+            *)
+              merged=false ;;
+          esac
+        fi
+
+        # --- 4. report -------------------------------------------------------
+        {
+          echo "ref=$candidate"
+          echo "sha=$sha"
+          echo "source=$source"
+          echo "merged=$merged"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$merged" = true ]; then
+          state="✅ on \`$BASE\`"
+        else
+          state="⚠️ **not on \`$BASE\` yet**"
+          echo "::notice title=Paired ref::Testing against $REPO@$candidate (${sha:0:7}), which is not on $BASE yet."
+        fi
+        {
+          echo "### ${REPO##*/} under test"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| repository | \`$REPO\` |"
+          echo "| ref | \`$candidate\` |"
+          echo "| commit | \`${sha:0:7}\` |"
+          echo "| picked by | $source |"
+          echo "| status | $state |"
+        } >> "$GITHUB_STEP_SUMMARY"

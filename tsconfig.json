@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    // TS 6 requires it once outDir is set. The project root, so ts-jest and
+    // `tsc --noEmit` see src/ and test/ alike; tsconfig.build.json narrows it
+    // to ./src for the real emit.
+    "rootDir": "./",
+    // No `baseUrl`: TS 6 deprecates it, and `paths` resolves relative to this
+    // file. These are what make `src/...` and `test/...` imports work — Nest's
+    // build rewrites them to relative requires in dist/, and jest resolves them
+    // through `modulePaths`.
+    "paths": {
+      "src/*": ["./src/*"],
+      "test/*": ["./test/*"]
+    },
+    // TS 6 no longer pulls in every @types package by default.
+    "types": ["node", "jest"],
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}

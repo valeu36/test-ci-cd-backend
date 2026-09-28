@@ -1,0 +1,23 @@
+# Local development services. Matches DATABASE_URL in .env.example.
+name: test-ci-cd-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d app']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-dev-data:

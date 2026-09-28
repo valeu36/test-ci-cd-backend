@@ -1,0 +1,211 @@
+name: CI
+
+# Lint, typecheck, unit, build, and the e2e suite against a real Postgres.
+#
+# Deployment is NOT here. Railway's GitHub integration deploys `main` with
+# "Wait for CI" on, so a merged commit only ships once this workflow's run on
+# it passes — which is why the `push: main` trigger must stay.
+#
+# frontend-e2e is the cross-repo contract check: the frontend's Playwright
+# suite, run against THIS branch's backend. It is the only thing that catches a
+# backend change breaking the SPA before the change merges. Which frontend
+# commit it uses is resolved per run (./.github/actions/resolve-paired-ref), so
+# a feature spanning both repos can be verified from either side.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      frontend_ref:
+        description: 'Frontend branch to test against. Blank auto-resolves (same-name branch, else main).'
+        required: false
+        default: ''
+
+permissions:
+  contents: read # least privilege; no job writes to the repo
+
+# A new push to a PR makes the in-flight run obsolete. Runs on main are never
+# cancelled — Railway's "Wait for CI" needs every main commit's verdict.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The sibling repository. Override with a repository variable if it is not
+  # <this owner>/test-ci-cd-frontend.
+  FRONTEND_REPOSITORY: ${{ vars.FRONTEND_REPOSITORY || format('{0}/test-ci-cd-frontend', github.repository_owner) }}
+
+jobs:
+  checks:
+    name: Lint, typecheck, unit, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      # The same file every other writer uses; the config layer validates
+      # DATABASE_URL as required even for suites that never connect.
+      - run: npm run env:testing
+
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+
+      # `typecheck` runs the ROOT tsconfig, which has no `include` — it would
+      # happily pass while `nest build` emitted to the wrong directory. Only
+      # the real build catches that.
+      #
+      # TWICE, deliberately. nest-cli.json sets `deleteOutDir` and the compiler
+      # runs incremental, so a .tsbuildinfo written outside dist/ survives the
+      # wipe and tells the second build there is nothing to emit — producing a
+      # dist/ missing whole directories that a clean first build never shows.
+      - run: npm run build
+      - run: npm run build
+      - name: Assert the built artifact has the layout production runs
+        run: |
+          test -f dist/main.js || { echo "dist/main.js missing — the image runs 'node dist/main'" >&2; exit 1; }
+          test -f dist/app/app.module.js || { echo "dist/app/app.module.js missing — dist/main.js requires it" >&2; exit 1; }
+          test -f dist/database/data-source.js || { echo "dist/database/data-source.js missing — Railway's pre-deploy migration:run:prod needs it" >&2; exit 1; }
+          leaked=$(find dist \( -path dist/test -o -path dist/scripts -o -name '*.spec.js' -o -path '*/tests/*' \) -print)
+          if [ -n "$leaked" ]; then
+            echo "test/script code leaked into the production artifact:" >&2
+            echo "$leaked" >&2
+            exit 1
+          fi
+
+  e2e:
+    name: E2E tests (Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - run: npm run env:testing
+      # `--wait` blocks until the compose healthcheck passes.
+      - run: npm run docker:test:up
+      - run: npm run migration:run:test
+      - run: npm run test:e2e
+
+  # The frontend's Playwright suite, driven against this branch's backend. The
+  # suite intercepts nothing, so it is a genuine contract test: its webServer
+  # boots THIS checkout via `npm run e2e:serve` and the specs talk to it.
+  #
+  # No merge gate on pairing, here or in the frontend: a paired change that
+  # leans on an unmerged sibling only warns. Gating could only ever be
+  # one-sided — two repos each refusing to merge until the other had would
+  # deadlock. Merge order (backend first) is a convention.
+  frontend-e2e:
+    name: Frontend E2E (contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read # to read the `Frontend-Ref:` trailer out of the PR body
+    steps:
+      # Both repos in SIBLING directories, neither at the workspace root: the
+      # root tsconfig here has no `include`, so a frontend checked out inside
+      # this project would be compiled by `nest start` with backend settings.
+      - uses: actions/checkout@v7
+        with:
+          path: backend-repo
+
+      # Addressed through `backend-repo/` because this job deliberately does
+      # NOT check this repo out at the workspace root.
+      - id: resolve
+        uses: ./backend-repo/.github/actions/resolve-paired-ref
+        with:
+          repository: ${{ env.FRONTEND_REPOSITORY }}
+          trailer-key: Frontend-Ref
+          token-secret-name: FRONTEND_REPO_TOKEN
+          # Deliberately not `|| github.token` — the action can only tell "no
+          # PAT configured" from "the PAT is wrong" if it sees the difference.
+          token: ${{ secrets.FRONTEND_REPO_TOKEN }}
+          dispatch-ref: ${{ inputs.frontend_ref }}
+
+      # By SHA, not by branch: the branch could move mid-run, and a run that
+      # says which commit it tested is the one you can reproduce.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.FRONTEND_REPOSITORY }}
+          ref: ${{ steps.resolve.outputs.sha }}
+          path: frontend-repo
+          token: ${{ secrets.FRONTEND_REPO_TOKEN || github.token }}
+
+      - if: steps.resolve.outputs.merged != 'true'
+        env:
+          REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          echo "::warning title=Paired with an unmerged frontend::This run proves the API against ${FRONTEND_REPOSITORY}@$REF, not against frontend main. Merging it leaves frontend main broken until that branch lands — merge them back to back."
+
+      # One Node for both checkouts (both .nvmrc files pin the same version),
+      # with the npm cache keyed on both lockfiles. Not ./.github/actions/setup,
+      # which keys on a single lockfile.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: backend-repo/.nvmrc
+          cache: npm
+          cache-dependency-path: |
+            backend-repo/package-lock.json
+            frontend-repo/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: backend-repo
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend-repo
+
+      - id: playwright-version
+        working-directory: frontend-repo
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - id: playwright-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      # No `install-deps` on a cache hit: the ubuntu-latest image already ships
+      # the shared libraries. If a browser ever fails to launch with a missing
+      # .so, add `npx playwright install-deps chromium` here.
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend-repo
+        run: npx playwright install --with-deps chromium
+
+      # E2E_BACKEND_DIR points the frontend's playwright.config webServer at
+      # this checkout, so e2e:serve provisions .env.testing, the Docker Postgres
+      # and migrations, then serves this branch's API.
+      - run: npm run test:e2e
+        working-directory: frontend-repo
+        env:
+          E2E_BACKEND_DIR: ${{ github.workspace }}/backend-repo
+
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-playwright-report
+          path: frontend-repo/playwright-report/
+          retention-days: 14
+
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-playwright-failures
+          path: frontend-repo/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # One check to require in branch protection, so adding a job later does not
+  # mean editing the protection rule.
+  ci:
+    name: CI
+    if: always()
+    needs: [checks, e2e, frontend-e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

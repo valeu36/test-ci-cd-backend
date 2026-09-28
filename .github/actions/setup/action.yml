@@ -1,0 +1,28 @@
+name: Setup
+description: Install Node per .nvmrc and the npm dependencies from the lockfile.
+
+inputs:
+  working-directory:
+    description: Directory holding package.json.
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version-file: ${{ inputs.working-directory }}/.nvmrc
+        cache: npm
+        cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+    # `npm ci`, not `npm install`: installs exactly the lockfile and fails loudly
+    # if package.json and package-lock.json have drifted apart.
+    #
+    # `--no-audit` is a timeout fix, not a preference: npm's advisories endpoint
+    # intermittently hangs and npm then waits out its whole 300s `fetch-timeout`
+    # before swallowing the failure. An install-time audit can never fail
+    # `npm ci` anyway — Dependabot is where that coverage lives.
+    - run: npm ci --no-audit --no-fund
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}

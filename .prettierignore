@@ -1,0 +1,7 @@
+dist
+coverage
+package-lock.json
+
+# Byte-identical in both repos, whose prettier configs differ — a plain
+# diff between the two copies must stay empty.
+.github/actions/resolve-paired-ref/

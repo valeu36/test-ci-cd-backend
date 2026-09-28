@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  // `include` and `rootDir` are both explicit, and both load-bearing. The root
+  // tsconfig declares no `include`, so TypeScript globs every .ts under the
+  // project root: ONE file outside src/ that the app imports would silently
+  // move the whole emit to dist/src/, breaking `start:prod` (node dist/main)
+  // and `migration:run:prod` (-d dist/database/data-source.js). Pinning rootDir
+  // turns that into a build error instead of a broken artifact.
+  "compilerOptions": {
+    "rootDir": "./src",
+    // Pinned INSIDE outDir: nest-cli.json sets `deleteOutDir`, so the build
+    // info has to die with the output it describes. Left at the project root
+    // it survives the wipe, tells the next build every file is already emitted,
+    // and leaves a dist/ missing whole directories.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo",
+    "sourceMap": false
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "test",
+    "scripts",
+    "dist",
+    "**/*.spec.ts",
+    "**/tests/**"
+  ]
+}
