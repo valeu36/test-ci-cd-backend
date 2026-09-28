@@ -26,10 +26,25 @@ npm run start:dev             # http://localhost:3000/api/v1/health, Swagger at 
 | `test:e2e`                                                      | Jest e2e (`test/**/*.e2e.spec.ts`) against that Postgres — needs `docker:test:up` + `migration:run:test` first |
 | `e2e:serve`                                                     | All of the above, then serves the API — what the frontend Playwright suite boots                               |
 | `migration:generate` / `migration:run:*` / `migration:revert:*` | TypeORM migrations. `:prod` runs from `dist/` and is Railway's pre-deploy command                              |
+| `openapi:generate` / `openapi:check`                            | Write `openapi.json` (no DB needed) / fail if the committed copy is stale                                      |
+| `railway:plan` / `railway:apply`                                | Preview / apply `.railway/railway.ts` to the Railway project                                                   |
+
+## API contract (`openapi.json`)
+
+`openapi.json` is generated from the controllers' decorators and committed. The
+frontend generates its typed client and TanStack Query hooks from a copy of it
+(`npm run api:generate` there). After changing an endpoint: run
+`npm run openapi:generate`, commit the file, then regenerate the frontend
+client on the paired branch.
+
+Errors from every endpoint share one envelope
+(`src/common/filters/all-exceptions.filter.ts`):
+`{ statusCode, error, message, path, timestamp }`, plus whatever body the
+exception carried.
 
 ## CI (`.github/workflows/ci.yml`)
 
-`checks` (lint, format, typecheck, unit, build ×2 + `dist/` layout assertion),
+`checks` (lint, format, typecheck, `openapi:check`, unit, build ×2 + `dist/` layout assertion),
 `e2e` (real Postgres), `frontend-e2e` (the frontend's Playwright suite against
 this branch), and one aggregate `CI` job — the only check branch protection
 needs to require.
@@ -41,32 +56,39 @@ needs to require.
 
 ## One-time GitHub setup
 
-- **Secret `FRONTEND_REPO_TOKEN`**: a fine-grained PAT with `Contents: read` on
-  the frontend repo (`github.token` cannot read a sibling private repo).
+- **Secret `FRONTEND_REPO_TOKEN`** (private repos only): a fine-grained PAT
+  with `Contents: read` on the frontend repo (`github.token` cannot read a
+  sibling private repo).
 - **Variable `FRONTEND_REPOSITORY`** (optional): `owner/name` if the frontend is
   not `<this owner>/test-ci-cd-frontend`.
 - **Branch protection / ruleset** on `main` requiring the `CI` check. Private
   repos need a paid plan (Team) for this.
 
+## Dependabot
+
+Minor and patch updates arrive weekly as one grouped PR. **Majors are ignored
+on purpose**: with Wait for CI, a merged Dependabot PR deploys straight to
+production. Upgrade a major by hand, on a branch.
+
 ## Railway (CD)
 
-Per environment, one Railway project with a **Postgres** service and an **api**
-service linked to this repo, branch `main`, **Wait for CI on**. Railway builds
-the `Dockerfile` at the repo root.
+One Railway project with **Postgres** and an **api** service linked to this
+repo, branch `main`, **Wait for CI on**. Railway builds the `Dockerfile` at the
+repo root.
 
-These live in the Railway service settings, not in this repo — Railway no
-longer accepts `railway.json` for new services, and its replacement
-(`.railway/railway.ts`) is only applied by running `railway config apply`:
+Everything about those three resources — build, pre-deploy migration,
+healthcheck, restart policy, draining, variables, Wait for CI — is declared in
+**`.railway/railway.ts`**. Railway does not read that file during deploys, so:
 
-| Setting            | Value                                     |
-| ------------------ | ----------------------------------------- |
-| Pre-deploy command | `npm run migration:run:prod`              |
-| Healthcheck        | `/api/v1/health`, 120s timeout            |
-| Restart policy     | on failure, 5 retries                     |
-| Draining           | 30s                                       |
-| `DATABASE_URL`     | `${{Postgres.DATABASE_URL}}`              |
-| `PORT`             | `3000`                                    |
-| `CORS_ORIGINS`     | `https://${{web.RAILWAY_PUBLIC_DOMAIN}}`  |
-| `SWAGGER_ENABLED`  | unset (`false`), or `true` to serve /docs |
+```bash
+railway login && railway link   # once: project melodious-consideration, env production
+npm run railway:plan            # read-only diff between the file and Railway
+npm run railway:apply           # apply it
+```
+
+The file is a named partial (`api`): it owns only the api service, Postgres and
+its volume, so applying it never touches the frontend's `web` service, which
+`test-ci-cd-frontend/.railway/railway.ts` owns. Change settings there, not in
+the dashboard — a dashboard edit shows up as drift in the next plan.
 
 Rollback: redeploy a previous deployment from the Railway dashboard.

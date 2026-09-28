@@ -23,6 +23,8 @@
     "test:e2e": "NODE_ENV=testing jest --config test/jest-e2e.json",
     "env:testing": "bash scripts/ensure-env-testing.sh",
     "e2e:serve": "bash scripts/e2e-serve.sh",
+    "openapi:generate": "DATABASE_URL=\"${DATABASE_URL:-postgres://openapi:openapi@localhost:5432/openapi}\" ts-node -r tsconfig-paths/register scripts/generate-openapi.ts && prettier --write --log-level warn openapi.json",
+    "openapi:check": "npm run -s openapi:generate && git diff --exit-code -- openapi.json || { echo \"openapi.json is stale: run npm run openapi:generate and commit it\" >&2; exit 1; }",
     "migration:generate": "NODE_ENV=development NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts",
     "migration:create": "typeorm-ts-node-commonjs migration:create",
     "migration:run:dev": "NODE_ENV=development NODE_OPTIONS=\"-r tsconfig-paths/register\" typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
@@ -33,7 +35,9 @@
     "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d --wait",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
     "docker:test:up": "docker compose -f docker-compose.test.yml up -d --wait",
-    "docker:test:down": "docker compose -f docker-compose.test.yml down"
+    "docker:test:down": "docker compose -f docker-compose.test.yml down",
+    "railway:plan": "railway config plan",
+    "railway:apply": "railway config apply"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -66,6 +70,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dotenv": "^18.0.4",
+    "helmet": "^8.3.0",
     "joi": "^18.2.9",
     "pg": "^8.23.0",
     "reflect-metadata": "^0.2.2",
@@ -87,6 +92,7 @@
     "globals": "^17.12.0",
     "jest": "^30.5.2",
     "prettier": "^3.9.9",
+    "railway": "^3.11.0",
     "source-map-support": "^0.5.21",
     "supertest": "^7.3.0",
     "ts-jest": "^29.4.14",
@@ -94,5 +100,12 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "@parcel/watcher": false,
+    "@scarf/scarf": false,
+    "unrs-resolver": false,
+    "fsevents": false
   }
 }

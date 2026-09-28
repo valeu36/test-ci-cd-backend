@@ -30,6 +30,22 @@ export class AppConfigService {
       .filter((origin) => origin !== '')
   }
 
+  /**
+   * TRUST_PROXY parsed into what Express `trust proxy` accepts: a hop count,
+   * `true`, or a subnet list. `false` when unset — trust nothing.
+   */
+  get trustProxy(): boolean | number | string {
+    const raw = this.config.getOrThrow<string>('TRUST_PROXY').trim()
+
+    if (raw === '' || raw === 'false') {
+      return false
+    }
+    if (raw === 'true') {
+      return true
+    }
+    return /^\d+$/.test(raw) ? Number(raw) : raw
+  }
+
   get swaggerEnabled(): boolean {
     return this.config.getOrThrow<boolean>('SWAGGER_ENABLED')
   }

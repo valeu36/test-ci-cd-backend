@@ -5,9 +5,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Majors are a deliberate upgrade, not a weekly chore: with Railway's Wait
+    # for CI, a merged Dependabot PR goes straight to production. Bump a major
+    # by hand (`npm install <pkg>@<major>`), on a branch, and read its notes.
+    # This also keeps @types/node on 24, matching .nvmrc.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
-      # One PR for every minor/patch bump; majors still arrive one by one so
-      # each can be read (and reverted) on its own.
+      # One PR for every minor/patch bump.
       minor-and-patch:
         update-types: [minor, patch]
 
@@ -18,3 +24,13 @@ updates:
     groups:
       actions:
         patterns: ['*']
+
+  # Base images in the Dockerfile. The node image's tag comes from
+  # `ARG NODE_VERSION`, kept in step with .nvmrc by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

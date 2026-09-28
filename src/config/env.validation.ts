@@ -15,5 +15,9 @@ export const envValidationSchema = Joi.object({
   // deployed origin(s). Empty means CORS stays off, which is fine when the SPA
   // reaches the API through a same-origin proxy (vite dev server).
   CORS_ORIGINS: Joi.string().allow('').default(''),
+  // Express `trust proxy`: a hop count ("1" behind Railway's one proxy),
+  // "true", or a subnet list ("loopback", "10.0.0.0/8"). Empty — the default —
+  // trusts no proxy, which is right when nothing sits in front of the app.
+  TRUST_PROXY: Joi.string().allow('').default(''),
   SWAGGER_ENABLED: Joi.boolean().default(false),
 })

@@ -53,6 +53,9 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm run typecheck
+      # openapi.json is the contract the frontend generates its client from;
+      # regenerate it and fail if the committed copy is stale.
+      - run: npm run openapi:check
       - run: npm test
 
       # `typecheck` runs the ROOT tsconfig, which has no `include` — it would
@@ -157,6 +160,16 @@ jobs:
         working-directory: backend-repo
       - run: npm ci --no-audit --no-fund
         working-directory: frontend-repo
+
+      # The frontend's client is generated from its own copy of openapi.json.
+      # A difference here only warns: an additive API change can merge first,
+      # and the frontend's e2e job — where the same check FAILS — is what
+      # forces its copy to catch up.
+      - name: Compare the frontend's copy of the API contract
+        run: |
+          if ! diff -q backend-repo/openapi.json frontend-repo/openapi.json >/dev/null; then
+            echo "::warning title=API contract differs::The frontend's openapi.json does not match this branch's. Run 'npm run api:generate' in the frontend (on the paired branch) and commit it."
+          fi
 
       - id: playwright-version
         working-directory: frontend-repo

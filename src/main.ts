@@ -1,8 +1,9 @@
 import { NestFactory } from '@nestjs/core'
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
+import { SwaggerModule } from '@nestjs/swagger'
 
 import { AppModule } from 'src/app/app.module'
 import { configureApp } from 'src/app/configure-app'
+import { buildOpenApiDocument } from 'src/app/openapi'
 import { AppConfigService } from 'src/config/app-config.service'
 
 async function bootstrap() {
@@ -15,16 +16,7 @@ async function bootstrap() {
   configureApp(app)
 
   if (configService.swaggerEnabled) {
-    const config = new DocumentBuilder()
-      .setTitle('API')
-      .setVersion('0.0.1')
-      .addBearerAuth()
-      .build()
-    SwaggerModule.setup(
-      'api/docs',
-      app,
-      SwaggerModule.createDocument(app, config),
-    )
+    SwaggerModule.setup('api/docs', app, buildOpenApiDocument(app))
   }
 
   await app.listen(configService.port)
